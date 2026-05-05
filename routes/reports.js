@@ -1,6 +1,7 @@
 const express         = require('express');
 const pool            = require('../db');
 const normalizeStatus = require('../utils/normalizeStatus');
+const { parseStoredDate, dateToYMD } = require('../utils/dateUtils');
 const router          = express.Router();
 
 const MONTH_NAMES = ['','January','February','March','April','May','June',
@@ -56,14 +57,22 @@ router.get('/', async function(req, res) {
     }
 
     // JS-side month and date range filter + SPST normalization
-    const monthIdx = MONTH_NAMES.indexOf(month);
+    // r.date may be an Excel serial (e.g. "45930") or a real date string.
+    // We compare via "YYYY-MM-DD" so timezone doesn't shift the day.
+    const monthIdx  = MONTH_NAMES.indexOf(month);
+    const wantMonth = month && month !== 'All Months' && monthIdx > 0;
+
     const result = rows
       .filter(function(r) {
-        if (month && month !== 'All Months' && monthIdx > 0) {
-          if (new Date(r.date).getMonth() + 1 !== monthIdx) return false;
+        const d = parseStoredDate(r.date);
+        if (!d) {
+          // Unparseable date — only include when no date filter is active
+          return !wantMonth && !from && !to;
         }
-        if (from && new Date(r.date) < new Date(from)) return false;
-        if (to   && new Date(r.date) > new Date(to))   return false;
+        if (wantMonth && d.getMonth() + 1 !== monthIdx) return false;
+        const ymd = dateToYMD(d);
+        if (from && ymd < from) return false;
+        if (to   && ymd > to)   return false;
         return true;
       })
       .map(function(r) {
