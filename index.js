@@ -100,7 +100,9 @@ const processRouter   = require('./routes/process');
 const app = express();
 app.use(cors());
 app.use(express.json());
-
+app.get("/", (req, res) => {
+  res.send("HR Dashboard Backend API is Running Successfully 🚀");
+});
 app.use('/api/dashboard', dashboardRouter);
 app.use('/api/employees', employeesRouter);
 app.use('/api/reports',   reportsRouter);
