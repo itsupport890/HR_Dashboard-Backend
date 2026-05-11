@@ -1,4 +1,4 @@
-// Convert any stored date value into a real JS Date.
+// Convert any stored date value into a real JS Date
 // Handles:
 //   - Excel serial numbers (45930 → 02-01-2026), as number or string
 //   - ISO strings ("2025-09-20")
