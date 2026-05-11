@@ -4,6 +4,7 @@ const XLSX    = require('xlsx');
 const router  = express.Router();
 
 const { parseTimeToMinutes, formatMinutesToTime, randInt } = require('../utils/timeUtils');
+const normalizeStatus = require('../utils/normalizeStatus');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -58,12 +59,39 @@ router.post('/', upload.single('file'), function(req, res) {
     let arrvFixed = 0;
     let deptFixed = 0;
     let dpRows = 0;
+    let woPhRows = 0;
+    let spstNormalized = 0;
 
     for (const row of rows) {
       const spstKey = findKey(row, 'spst') || findKey(row, 'status');
       if (!spstKey) continue;
 
       const status = String(row[spstKey] || '').toUpperCase().trim();
+      const normalizedStatus = normalizeStatus(status);
+
+      // Normalize SPST column in the output
+      if (normalizedStatus !== status) {
+        row[spstKey] = normalizedStatus;
+        spstNormalized++;
+      }
+
+      // Handle WO and PH: blank out ARRV and DEPT
+      if (normalizedStatus === 'WO' || normalizedStatus === 'PH') {
+        const arrvKey = findKey(row, 'arrv') || findKey(row, 'arrival') || findKey(row, 'entry');
+        const deptKey = findDeptExitKey(row);
+
+        if (arrvKey && row[arrvKey]) {
+          row[arrvKey] = '';
+          woPhRows++;
+        }
+        if (deptKey && row[deptKey]) {
+          row[deptKey] = '';
+          woPhRows++;
+        }
+        continue;
+      }
+
+      // Original DP processing logic
       if (status !== 'DP') continue;
 
       dpRows++;
@@ -150,7 +178,7 @@ router.post('/', upload.single('file'), function(req, res) {
     res.set({
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Disposition': 'attachment; filename="RC_HR_Processed.xlsx"',
-      'X-Process-Stats': JSON.stringify({ dpRows, arrvFixed, deptFixed }),
+      'X-Process-Stats': JSON.stringify({ dpRows, arrvFixed, deptFixed, woPhRows }),
       'Access-Control-Expose-Headers': 'X-Process-Stats, Content-Disposition',
     });
 
