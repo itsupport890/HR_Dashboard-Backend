@@ -111,20 +111,30 @@ router.post('/', upload.single('file'), function(req, res) {
       const arrvMin = arrvKey ? parseTimeToMinutes(row[arrvKey]) : null;
       const deptMin = deptKey ? parseTimeToMinutes(row[deptKey]) : null;
 
+      // Cap ARRV to maximum 40 minutes after SHIFT IN
       if (shiftInMin !== null && arrvMin !== null && arrvKey) {
-        if (arrvMin - shiftInMin > LATE_THRESHOLD_MIN) {
-          const newMin = shiftInMin + randInt(ARRV_RANDOM_OFFSET_RANGE[0], ARRV_RANDOM_OFFSET_RANGE[1]);
-          row[arrvKey] = formatMinutesToTime(newMin);
+        const diff = arrvMin - shiftInMin;
+        // If ARRV is more than 40 minutes after SHIFT IN, cap it at SHIFT IN + 40 minutes
+        if (diff > LATE_THRESHOLD_MIN) {
+          const cappedMin = shiftInMin + LATE_THRESHOLD_MIN;
+          row[arrvKey] = formatMinutesToTime(cappedMin);
           arrvFixed++;
         }
+        // If ARRV < SHIFT IN, keep as is
+        // If ARRV <= SHIFT IN + 40 min, keep as is
       }
 
+      // Cap DEPT to maximum 40 minutes after SHIFT OUT
       if (shiftOutMin !== null && deptMin !== null && deptKey) {
-        if (deptMin - shiftOutMin > LATE_THRESHOLD_MIN) {
-          const newMin = shiftOutMin + randInt(DEPT_RANDOM_OFFSET_RANGE[0], DEPT_RANDOM_OFFSET_RANGE[1]);
-          row[deptKey] = formatMinutesToTime(newMin);
+        const diff = deptMin - shiftOutMin;
+        // If DEPT is more than 40 minutes after SHIFT OUT, cap it at SHIFT OUT + 40 minutes
+        if (diff > LATE_THRESHOLD_MIN) {
+          const cappedMin = shiftOutMin + LATE_THRESHOLD_MIN;
+          row[deptKey] = formatMinutesToTime(cappedMin);
           deptFixed++;
         }
+        // If DEPT < SHIFT OUT, keep as is
+        // If DEPT <= SHIFT OUT + 40 min, keep as is
       }
     }
 
