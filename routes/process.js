@@ -136,21 +136,12 @@ router.post('/', upload.single('file'), function(req, res) {
         }
       }
 
-      // Cap DEPT: should not exceed shift duration from SHIFT OUT
-      // Also cap to max 40 minutes late
+      // Cap DEPT: if more than 40 minutes after SHIFT OUT, or beyond shift duration, cap at SHIFT OUT
       if (shiftOutMin !== null && deptMin !== null && deptKey && shiftDurationMin !== null) {
         const diff = deptMin - shiftOutMin;
-        
-        // If DEPT is more than 40 minutes after SHIFT OUT, cap it at 40 minutes
-        if (diff > LATE_THRESHOLD_MIN) {
-          const cappedMin = shiftOutMin + LATE_THRESHOLD_MIN;
-          row[deptKey] = formatMinutesToTime(cappedMin);
-          deptFixed++;
-        }
-        // If DEPT exceeds the shift duration, cap it to shift duration
-        else if (diff > shiftDurationMin) {
-          const cappedMin = shiftOutMin + shiftDurationMin;
-          row[deptKey] = formatMinutesToTime(cappedMin);
+
+        if (diff > LATE_THRESHOLD_MIN || diff > shiftDurationMin) {
+          row[deptKey] = formatMinutesToTime(shiftOutMin);
           deptFixed++;
         }
         // If DEPT < SHIFT OUT, keep as is
