@@ -62,11 +62,6 @@ router.post('/', upload.single('file'), function(req, res) {
     let woPhRows = 0;
     let spstNormalized = 0;
 
-    // Add serial numbers to maintain row order
-    for (let i = 0; i < rows.length; i++) {
-      rows[i]['S.No'] = i + 1;
-    }
-
     for (const row of rows) {
       const spstKey = findKey(row, 'spst') || findKey(row, 'status');
       if (!spstKey) continue;
@@ -111,30 +106,54 @@ router.post('/', upload.single('file'), function(req, res) {
       const arrvMin = arrvKey ? parseTimeToMinutes(row[arrvKey]) : null;
       const deptMin = deptKey ? parseTimeToMinutes(row[deptKey]) : null;
 
-      // Cap ARRV to maximum 40 minutes after SHIFT IN
-      if (shiftInMin !== null && arrvMin !== null && arrvKey) {
+      // Calculate shift duration in minutes
+      let shiftDurationMin = null;
+      if (shiftInMin !== null && shiftOutMin !== null) {
+        shiftDurationMin = shiftOutMin - shiftInMin;
+        // Handle case where shift crosses midnight (e.g., 10 PM to 6 AM)
+        if (shiftDurationMin < 0) {
+          shiftDurationMin += 24 * 60; // Add 24 hours
+        }
+      }
+
+      // Cap ARRV: should not exceed shift duration from SHIFT IN
+      // Also cap to max 40 minutes late
+      if (shiftInMin !== null && arrvMin !== null && arrvKey && shiftDurationMin !== null) {
         const diff = arrvMin - shiftInMin;
-        // If ARRV is more than 40 minutes after SHIFT IN, cap it at SHIFT IN + 40 minutes
-        if (diff > LATE_THRESHOLD_MIN) {
+        
+        // If ARRV crosses into next day (negative diff), keep as is
+        // If ARRV is more than 40 minutes after SHIFT IN, cap it at 40 minutes
+        if (diff > 0 && diff > LATE_THRESHOLD_MIN) {
           const cappedMin = shiftInMin + LATE_THRESHOLD_MIN;
           row[arrvKey] = formatMinutesToTime(cappedMin);
           arrvFixed++;
         }
-        // If ARRV < SHIFT IN, keep as is
-        // If ARRV <= SHIFT IN + 40 min, keep as is
+        // If ARRV exceeds the shift duration, cap it to shift duration
+        else if (diff > shiftDurationMin) {
+          const cappedMin = shiftInMin + shiftDurationMin;
+          row[arrvKey] = formatMinutesToTime(cappedMin);
+          arrvFixed++;
+        }
       }
 
-      // Cap DEPT to maximum 40 minutes after SHIFT OUT
-      if (shiftOutMin !== null && deptMin !== null && deptKey) {
+      // Cap DEPT: should not exceed shift duration from SHIFT OUT
+      // Also cap to max 40 minutes late
+      if (shiftOutMin !== null && deptMin !== null && deptKey && shiftDurationMin !== null) {
         const diff = deptMin - shiftOutMin;
-        // If DEPT is more than 40 minutes after SHIFT OUT, cap it at SHIFT OUT + 40 minutes
+        
+        // If DEPT is more than 40 minutes after SHIFT OUT, cap it at 40 minutes
         if (diff > LATE_THRESHOLD_MIN) {
           const cappedMin = shiftOutMin + LATE_THRESHOLD_MIN;
           row[deptKey] = formatMinutesToTime(cappedMin);
           deptFixed++;
         }
+        // If DEPT exceeds the shift duration, cap it to shift duration
+        else if (diff > shiftDurationMin) {
+          const cappedMin = shiftOutMin + shiftDurationMin;
+          row[deptKey] = formatMinutesToTime(cappedMin);
+          deptFixed++;
+        }
         // If DEPT < SHIFT OUT, keep as is
-        // If DEPT <= SHIFT OUT + 40 min, keep as is
       }
     }
 
