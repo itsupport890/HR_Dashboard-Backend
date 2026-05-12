@@ -137,14 +137,19 @@ router.post('/', upload.single('file'), function(req, res) {
       }
 
       // Cap DEPT: if more than 40 minutes after SHIFT OUT, or beyond shift duration, cap at SHIFT OUT
+      // If DEPT is "before" SHIFT OUT in raw minutes (e.g. DEPT = 01:00 AM, SHIFT OUT = 10:00 PM),
+      // treat DEPT as next-day post-midnight rather than an early departure.
       if (shiftOutMin !== null && deptMin !== null && deptKey && shiftDurationMin !== null) {
-        const diff = deptMin - shiftOutMin;
+        let effectiveDeptMin = deptMin;
+        if (effectiveDeptMin < shiftOutMin) {
+          effectiveDeptMin += 24 * 60;
+        }
+        const diff = effectiveDeptMin - shiftOutMin;
 
         if (diff > LATE_THRESHOLD_MIN || diff > shiftDurationMin) {
           row[deptKey] = formatMinutesToTime(shiftOutMin);
           deptFixed++;
         }
-        // If DEPT < SHIFT OUT, keep as is
       }
     }
 
