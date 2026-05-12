@@ -62,6 +62,11 @@ router.post('/', upload.single('file'), function(req, res) {
     let woPhRows = 0;
     let spstNormalized = 0;
 
+    // Add serial numbers to maintain row order
+    for (let i = 0; i < rows.length; i++) {
+      rows[i]['S.No'] = i + 1;
+    }
+
     for (const row of rows) {
       const spstKey = findKey(row, 'spst') || findKey(row, 'status');
       if (!spstKey) continue;
