@@ -105,7 +105,7 @@ const DEFAULT_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
   'http://127.0.0.1:5173',
-  'https://starlit-daifuku-1873eb.netlify.app',
+  'https://royal-chain-hr-dashboard.vercel.app',
 ];
 const envOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map(function(s) { return s.trim(); }).filter(Boolean);
