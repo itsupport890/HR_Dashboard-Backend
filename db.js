@@ -1,11 +1,9 @@
-const { Pool } = require("pg");
-require("dotenv").config();
+require('dotenv').config();
+// Firestore compatibility helpers
+const { db } = require('./firestore');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false,
-  },
-});
+function getCollection(name) {
+  return db.collection(name);
+}
 
-module.exports = pool;
+module.exports = { db, getCollection };

@@ -1,8 +1,11 @@
 const express         = require('express');
-const pool            = require('../db');
+const { getCollection } = require('../db');
 const normalizeStatus = require('../utils/normalizeStatus');
 const { parseStoredDate, dateToYMD } = require('../utils/dateUtils');
 const router          = express.Router();
+
+const employeesCol = getCollection('employees');
+const attendanceCol = getCollection('attendance');
 
 const MONTH_NAMES = ['','January','February','March','April','May','June',
                      'July','August','September','October','November','December'];
@@ -12,49 +15,41 @@ router.get('/', async function(req, res) {
   try {
     const { search = '', month = '', from = '', to = '' } = req.query;
 
-    let rows;
+    // Load attendance and employee maps, then join in JS
+    const empSnapshot = await employeesCol.get();
+    const empMap = {};
+    empSnapshot.docs.forEach(d => { empMap[d.data().code] = d.data(); });
+
+    const attSnapshot = await attendanceCol.get();
+    let rows = attSnapshot.docs.map(d => {
+      const a = d.data();
+      const e = empMap[a.employee_code] || {};
+      return {
+        name: e.name || '',
+        code: a.employee_code,
+        branch: e.branch || '',
+        department: e.department || '',
+        joinDate: e.join_date || '',
+        date: a.date,
+        day: a.day || '',
+        spst: a.status || '',
+        shiftIn: a.shift_in || '',
+        shiftOut: a.shift_out || '',
+        arrv: a.entry || '',
+        dept: a.exit_time || ''
+      };
+    });
+
     if (search) {
-      const like = '%' + search.toLowerCase() + '%';
-      const result = await pool.query(
-        `SELECT e.name        AS name,
-                a.employee_code AS code,
-                e.branch      AS branch,
-                e.department  AS department,
-                e.join_date   AS "joinDate",
-                a.date        AS date,
-                a.day         AS day,
-                a.status      AS spst,
-                a.shift_in    AS "shiftIn",
-                a.shift_out   AS "shiftOut",
-                a.entry       AS arrv,
-                a.exit_time   AS dept
-         FROM attendance a
-         LEFT JOIN employees e ON e.code = a.employee_code
-         WHERE LOWER(e.name) LIKE $1 OR LOWER(a.employee_code) LIKE $2
-         ORDER BY a.date DESC, e.name ASC`,
-        [like, like]
-      );
-      rows = result.rows;
-    } else {
-      const result = await pool.query(
-        `SELECT e.name        AS name,
-                a.employee_code AS code,
-                e.branch      AS branch,
-                e.department  AS department,
-                e.join_date   AS "joinDate",
-                a.date        AS date,
-                a.day         AS day,
-                a.status      AS spst,
-                a.shift_in    AS "shiftIn",
-                a.shift_out   AS "shiftOut",
-                a.entry       AS arrv,
-                a.exit_time   AS dept
-         FROM attendance a
-         LEFT JOIN employees e ON e.code = a.employee_code
-         ORDER BY a.date DESC, e.name ASC`
-      );
-      rows = result.rows;
+      const q = search.toLowerCase();
+      rows = rows.filter(r => (r.name || '').toLowerCase().includes(q) || (r.code || '').toLowerCase().includes(q));
     }
+
+    // Sort by date desc then name
+    rows.sort((a,b) => {
+      if (a.date === b.date) return (a.name || '').localeCompare(b.name || '');
+      return (b.date || '').localeCompare(a.date || '');
+    });
 
     // JS-side month and date range filter + SPST normalization
     // r.date may be an Excel serial (e.g. "45930") or a real date string.

@@ -1,86 +1,66 @@
 require('dotenv').config();
 const express = require('express');
 const cors    = require('cors');
-const pool    = require('./db');
+const { db, getCollection } = require('./db');
 
 // ── Initialize DB first (async) before routes are loaded ──────────────
 async function initializeDatabase() {
   try {
-    // Create employees table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS employees (
-        id         SERIAL PRIMARY KEY,
-        name       VARCHAR NOT NULL,
-        code       VARCHAR UNIQUE NOT NULL,
-        branch     VARCHAR DEFAULT '',
-        department VARCHAR DEFAULT '',
-        join_date  VARCHAR DEFAULT ''
-      )
-    `);
-
-    // Create attendance table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS attendance (
-        id            SERIAL PRIMARY KEY,
-        employee_code VARCHAR NOT NULL,
-        date          VARCHAR NOT NULL,
-        day           VARCHAR DEFAULT '',
-        shift_in      VARCHAR DEFAULT '',
-        shift_out     VARCHAR DEFAULT '',
-        entry         VARCHAR DEFAULT '',
-        exit_time     VARCHAR DEFAULT '',
-        status        VARCHAR DEFAULT '',
-        UNIQUE(employee_code, date)
-      )
-    `);
-
+    // Firestore is schemaless — ensure collections exist by optionally seeding data
     // Seed only if empty AND seeding is explicitly enabled (set SEED_DATA=true in .env)
-    const empCount = await pool.query('SELECT COUNT(*) as c FROM employees');
-    if (parseInt(empCount.rows[0].c) === 0 && process.env.SEED_DATA === 'true') {
-      console.log('Seeding initial data...');
+    const employeesCol = getCollection('employees');
+    const attendanceCol = getCollection('attendance');
+
+    const empSnapshot = await employeesCol.limit(1).get();
+    if (empSnapshot.empty && process.env.SEED_DATA === 'true') {
+      console.log('Seeding initial data into Firestore...');
       const seedEmployees  = require('./seed/employees');
       const seedAttendance = require('./seed/attendance');
 
       for (const e of seedEmployees) {
-        await pool.query(
-          `INSERT INTO employees (name, code, branch, department, join_date) VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (code) DO NOTHING`,
-          [e.name, e.code, e.branch || '', e.department, e.joinDate]
-        );
+        const docId = String(e.code);
+        await employeesCol.doc(docId).set({
+          name: e.name,
+          code: e.code,
+          branch: e.branch || '',
+          department: e.department || '',
+          join_date: e.joinDate || ''
+        }, { merge: false });
       }
 
       for (const a of seedAttendance) {
-        await pool.query(
-          `INSERT INTO attendance (employee_code, date, day, shift_in, shift_out, entry, exit_time, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (employee_code, date) DO NOTHING`,
-          [a.code, a.date, a.day, a.shiftIn, a.shiftOut, a.entry, a.exit, a.status]
-        );
+        const docId = `${a.code}_${a.date}`;
+        await attendanceCol.doc(docId).set({
+          employee_code: a.code,
+          date: a.date,
+          day: a.day || '',
+          shift_in: a.shiftIn || '',
+          shift_out: a.shiftOut || '',
+          entry: a.entry || '',
+          exit_time: a.exit || '',
+          status: a.status || ''
+        }, { merge: false });
       }
 
-      console.log(`Seeded ${seedEmployees.length} employees, ${seedAttendance.length} attendance records.`);
+      console.log(`Seeded ${seedEmployees.length} employees, ${seedAttendance.length} attendance records into Firestore.`);
     }
 
-    // ── Normalize SPST values in any existing rows (WOP→WO, PHP→PH, etc.) ──
+    // Normalize SPST values in any existing attendance documents
     const normalizeStatus = require('./utils/normalizeStatus');
-    const distinctStatuses = await pool.query(
-      `SELECT DISTINCT status FROM attendance WHERE status IS NOT NULL AND status != ''`
-    );
+    const attSnapshot = await attendanceCol.get();
     let normalizedCount = 0;
-    for (const row of distinctStatuses.rows) {
-      const original   = row.status;
+    for (const doc of attSnapshot.docs) {
+      const data = doc.data();
+      const original = data.status || '';
       const normalized = normalizeStatus(original);
       if (normalized !== original) {
-        const result = await pool.query(
-          `UPDATE attendance SET status = $1 WHERE status = $2`,
-          [normalized, original]
-        );
-        console.log(`  SPST: '${original}' → '${normalized}' (${result.rowCount} rows)`);
-        normalizedCount += result.rowCount;
+        await attendanceCol.doc(doc.id).update({ status: normalized });
+        normalizedCount++;
+        console.log(`  SPST: '${original}' → '${normalized}' (doc ${doc.id})`);
       }
     }
     if (normalizedCount > 0) {
-      console.log(`Normalized ${normalizedCount} attendance row(s).`);
+      console.log(`Normalized ${normalizedCount} attendance document(s).`);
     }
 
     console.log('Database initialized successfully');
@@ -139,7 +119,7 @@ const PORT = process.env.PORT || 3001;
 initializeDatabase().then(() => {
   app.listen(PORT, function() {
     console.log('HR Dashboard server ready at http://localhost:' + PORT);
-    console.log(`Database: ${process.env.DB_NAME || 'hr_dashboard'} (PostgreSQL)`);
+    console.log(`Database: Firestore`);
   });
 }).catch(err => {
   console.error('Failed to start server:', err);
