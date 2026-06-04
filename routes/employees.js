@@ -1,7 +1,10 @@
 const express         = require('express');
-const pool            = require('../db');
+const { getCollection } = require('../db');
 const normalizeStatus = require('../utils/normalizeStatus');
 const router          = express.Router();
+
+const employeesCol = getCollection('employees');
+const attendanceCol = getCollection('attendance');
 
 const MONTH_NAMES = ['','January','February','March','April','May','June',
                      'July','August','September','October','November','December'];
@@ -11,23 +14,16 @@ router.get('/', async function(req, res) {
   try {
     const { search = '', month = '' } = req.query;
 
-    let rows;
+    // Fetch all employees and filter in JS (Firestore text-search is limited)
+    const snapshot = await employeesCol.get();
+    let rows = snapshot.docs.map(d => Object.assign({ id: d.id }, d.data()));
     if (search) {
-      const like = '%' + search.toLowerCase() + '%';
-      const result = await pool.query(
-        `SELECT id, name, code, branch, department, join_date
-         FROM employees
-         WHERE LOWER(name) LIKE $1 OR LOWER(code) LIKE $2
-         ORDER BY name ASC`,
-        [like, like]
-      );
-      rows = result.rows;
-    } else {
-      const result = await pool.query(
-        `SELECT id, name, code, branch, department, join_date FROM employees ORDER BY name ASC`
-      );
-      rows = result.rows;
+      const q = search.toLowerCase();
+      rows = rows.filter(r => (r.name || '').toLowerCase().includes(q) || (r.code || '').toLowerCase().includes(q));
     }
+
+    // Sort by name
+    rows.sort((a,b) => (a.name || '').localeCompare(b.name || ''));
 
     if (month && month !== 'All Months') {
       const idx = MONTH_NAMES.indexOf(month);
@@ -51,14 +47,10 @@ router.get('/:code/attendance', async function(req, res) {
     const { code }       = req.params;
     const { month = '' } = req.query;
 
-    const result = await pool.query(
-      `SELECT * FROM attendance WHERE employee_code = $1 ORDER BY date DESC`,
-      [code]
-    );
+    // Query attendance for this employee
+    const snapshot = await attendanceCol.where('employee_code', '==', code).orderBy('date', 'desc').get();
     // Normalize SPST on read so frontend always sees clean values
-    const rows = result.rows.map(function(r) {
-      return Object.assign({}, r, { status: normalizeStatus(r.status) });
-    });
+    const rows = snapshot.docs.map(d => Object.assign({}, d.data(), { status: normalizeStatus(d.data().status || '') }));
 
     let records = rows;
     if (month && month !== 'All Months') {

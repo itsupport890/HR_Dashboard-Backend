@@ -1,9 +1,12 @@
 const express         = require('express');
 const multer          = require('multer');
 const XLSX            = require('xlsx');
-const pool            = require('../db');
+const { getCollection } = require('../db');
 const normalizeStatus = require('../utils/normalizeStatus');
 const router          = express.Router();
+
+const employeesCol = getCollection('employees');
+const attendanceCol = getCollection('attendance');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -59,7 +62,6 @@ function mapRow(rawRow) {
 router.post('/', upload.single('file'), async function(req, res) {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
 
-  const client = await pool.connect();
   try {
     const workbook  = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
@@ -70,108 +72,93 @@ router.post('/', upload.single('file'), async function(req, res) {
       return res.status(400).json({ error: 'Excel file is empty or has no data rows.' });
     }
 
-    // Start transaction
-    await client.query('BEGIN');
-
     let empUpserted = 0, attUpserted = 0, skipped = 0;
 
     for (const raw of rawRows) {
       const row = mapRow(raw);
       if (!row.code) { skipped++; continue; }
 
-      // Upsert employee
-      await client.query(
-        `INSERT INTO employees (code, name, branch, department, join_date)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (code) DO UPDATE SET
-           name       = CASE WHEN $2 != '' THEN $2 ELSE employees.name END,
-           branch     = CASE WHEN $3 != '' THEN $3 ELSE employees.branch END,
-           department = CASE WHEN $4 != '' THEN $4 ELSE employees.department END,
-           join_date  = CASE WHEN $5 != '' THEN $5 ELSE employees.join_date END`,
-        [row.code, row.name || '', row.branch || '', row.department || '', row.joinDate || '']
-      );
+      // Upsert employee — only set fields that have non-empty values
+      const empDoc = employeesCol.doc(String(row.code));
+      const empUpdate = {};
+      if (row.name) empUpdate.name = row.name;
+      if (row.branch) empUpdate.branch = row.branch;
+      if (row.department) empUpdate.department = row.department;
+      if (row.joinDate) empUpdate.join_date = row.joinDate;
+      if (Object.keys(empUpdate).length > 0) {
+        await empDoc.set(Object.assign({ code: row.code }, empUpdate), { merge: true });
+      } else {
+        // ensure doc exists with code
+        await empDoc.set({ code: row.code }, { merge: true });
+      }
       empUpserted++;
 
       // Upsert attendance if date exists
       if (row.date) {
-        await client.query(
-          `INSERT INTO attendance (employee_code, date, day, shift_in, shift_out, entry, exit_time, status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (employee_code, date) DO UPDATE SET
-             day       = CASE WHEN $3 != '' THEN $3 ELSE attendance.day END,
-             shift_in  = CASE WHEN $4 != '' THEN $4 ELSE attendance.shift_in END,
-             shift_out = CASE WHEN $5 != '' THEN $5 ELSE attendance.shift_out END,
-             entry     = CASE WHEN $6 != '' THEN $6 ELSE attendance.entry END,
-             exit_time = CASE WHEN $7 != '' THEN $7 ELSE attendance.exit_time END,
-             status    = CASE WHEN $8 != '' THEN $8 ELSE attendance.status END`,
-          [row.code, row.date, row.day || '', row.shiftIn || '',
-           row.shiftOut || '', row.entry || '', row.exit || '', normalizeStatus(row.status)]
-        );
+        const attId = `${row.code}_${row.date}`;
+        const attDoc = attendanceCol.doc(attId);
+        const attUpdate = {
+          employee_code: row.code,
+          date: row.date
+        };
+        if (row.day) attUpdate.day = row.day;
+        if (row.shiftIn) attUpdate.shift_in = row.shiftIn;
+        if (row.shiftOut) attUpdate.shift_out = row.shiftOut;
+        if (row.entry) attUpdate.entry = row.entry;
+        if (row.exit) attUpdate.exit_time = row.exit;
+        attUpdate.status = normalizeStatus(row.status || '');
+        await attDoc.set(attUpdate, { merge: true });
         attUpserted++;
       }
     }
 
-    // Commit transaction
-    await client.query('COMMIT');
-
     res.json({
       success: true,
-      message: `Sync complete. ${empUpserted} employee record(s) updated, ` +
-               `${attUpserted} attendance record(s) upserted, ` +
-               `${skipped} row(s) skipped (missing Employee Code).`,
+      message: `Sync complete. ${empUpserted} employee record(s) updated, ${attUpserted} attendance record(s) upserted, ${skipped} row(s) skipped (missing Employee Code).`,
     });
   } catch (err) {
-    // Rollback on error
-    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // POST /api/sync/clear  — wipe ALL employees and attendance from the database
 router.post('/clear', async function(req, res) {
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    const att = await client.query('DELETE FROM attendance');
-    const emp = await client.query('DELETE FROM employees');
-    // Reset SERIAL sequences so new IDs start from 1
-    await client.query("SELECT setval(pg_get_serial_sequence('employees','id'), 1, false)");
-    await client.query("SELECT setval(pg_get_serial_sequence('attendance','id'), 1, false)");
-    await client.query('COMMIT');
-    res.json({
-      success: true,
-      message: `Cleared ${emp.rowCount} employee(s) and ${att.rowCount} attendance record(s).`,
-    });
+    // Delete all attendance docs
+    const attSnap = await attendanceCol.get();
+    let attDeleted = 0;
+    const deletePromises = [];
+    attSnap.docs.forEach(d => { deletePromises.push(attendanceCol.doc(d.id).delete()); attDeleted++; });
+    await Promise.all(deletePromises);
+
+    // Delete all employee docs
+    const empSnap = await employeesCol.get();
+    let empDeleted = 0;
+    const del2 = [];
+    empSnap.docs.forEach(d => { del2.push(employeesCol.doc(d.id).delete()); empDeleted++; });
+    await Promise.all(del2);
+
+    res.json({ success: true, message: `Cleared ${empDeleted} employee(s) and ${attDeleted} attendance record(s).` });
   } catch (err) {
-    await client.query('ROLLBACK');
     console.error(err);
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // POST /api/sync/normalize  — manually clean up SPST values in the DB
 router.post('/normalize', async function(req, res) {
   try {
-    const distinct = await pool.query(
-      `SELECT DISTINCT status FROM attendance WHERE status IS NOT NULL AND status != ''`
-    );
+    const attSnap = await attendanceCol.get();
     const changes = [];
     let totalRows = 0;
-    for (const row of distinct.rows) {
-      const original   = row.status;
+    for (const doc of attSnap.docs) {
+      const original = doc.data().status || '';
       const normalized = normalizeStatus(original);
       if (normalized !== original) {
-        const result = await pool.query(
-          `UPDATE attendance SET status = $1 WHERE status = $2`,
-          [normalized, original]
-        );
-        changes.push({ from: original, to: normalized, rows: result.rowCount });
-        totalRows += result.rowCount;
+        await attendanceCol.doc(doc.id).update({ status: normalized });
+        changes.push({ from: original, to: normalized, doc: doc.id });
+        totalRows++;
       }
     }
     res.json({ success: true, totalRows, changes });
