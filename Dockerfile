@@ -18,9 +18,9 @@ COPY . .
 #  - Or set `FIREBASE_SERVICE_ACCOUNT` from CI/CD secrets (never commit it)
 
 ENV NODE_ENV=production
-ENV PORT=3001 \
+ENV PORT=3000 \
 SEED_DATA=true
 
-EXPOSE 3001
+EXPOSE 3000
 
 CMD ["npm", "start"]
