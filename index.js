@@ -92,12 +92,7 @@ const envOrigins = (process.env.ALLOWED_ORIGINS || '')
 const allowedOrigins = Array.from(new Set([...DEFAULT_ORIGINS, ...envOrigins]));
 
 app.use(cors({
-  origin: function(origin, callback) {
-    // Allow non-browser clients (curl, server-to-server) with no Origin header
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) return callback(null, true);
-    return callback(new Error('CORS blocked for origin: ' + origin));
-  },
+  origin: '*',
   credentials: true,
   exposedHeaders: ['X-Process-Stats', 'Content-Disposition'],
 }));
